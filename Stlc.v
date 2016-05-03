@@ -10,6 +10,7 @@ Inductive ty : Type :=
   | TBool  : ty 
   | TArrow : ty -> ty -> ty.
 
+
 (* Terms *)
 Inductive tm : Type :=
   | tvar : id -> tm
@@ -19,6 +20,13 @@ Inductive tm : Type :=
   | tfalse : tm
   | tif : tm -> tm -> tm -> tm.
 
+Tactic Notation "t_cases" tactic(first) ident(c) :=
+  first;
+  [ Case_aux c "tvar" | Case_aux c "tapp" 
+  | Case_aux c "tabs" | Case_aux c "ttrue" 
+  | Case_aux c "tfalse" | Case_aux c "tif" ].
+
+
 (* Values *)
 Inductive value : tm -> Prop :=
   | v_abs : forall x T t,
@@ -27,6 +35,9 @@ Inductive value : tm -> Prop :=
       value ttrue
   | v_false : 
       value tfalse.
+
+Hint Constructors value.
+
 
 (* Substitution *)
 Reserved Notation "'[' x ':=' s ']' t" (at level 20).
@@ -49,36 +60,8 @@ Fixpoint subst (x:id) (s:tm) (t:tm) : tm :=
 
 where "'[' x ':=' s ']' t" := (subst x s t).
 
+
 (* Small-Step Semantics *)
-(*
-
-value v2
-----------------------------                                   (ST_AppAbs)
-(\x:T.t12) v2 ==> [x:=v2]t12
-
-t1 ==> t1'
-----------------                                               (ST_App1)
-t1 t2 ==> t1' t2
-
-value v1
-t2 ==> t2'
-----------------                                               (ST_App2)
-v1 t2 ==> v1 t2'
-
---------------------------------                               (ST_IfTrue)
-(if true then t1 else t2) ==> t1
-
----------------------------------                              (ST_IfFalse)
-(if false then t1 else t2) ==> t2
-
-t1 ==> t1'
-----------------------------------------------------           (ST_If)
-(if t1 then t2 else t3) ==> (if t1' then t2 else t3)
-
-
----------------------------                                    (ST_EguessVar)
-*)
-
 Reserved Notation "t1 '==>' t2" (at level 40).
 
 Inductive step : tm -> tm -> Prop :=
@@ -111,46 +94,6 @@ where "t1 '==>' t2" := (step t1 t2).
 Notation multistep := (multi step).
 Notation "t1 '==>*' t2" := (multistep t1 t2) (at level 40).
 
-
-
-
-(* Testing *)
-
-Tactic Notation "t_cases" tactic(first) ident(c) :=
-  first;
-  [ Case_aux c "tvar" | Case_aux c "tapp" 
-  | Case_aux c "tabs" | Case_aux c "ttrue" 
-  | Case_aux c "tfalse" | Case_aux c "tif" ].
-
-Definition x := (Id 0).
-Definition y := (Id 1).
-Definition z := (Id 2).
-Hint Unfold x.
-Hint Unfold y.
-Hint Unfold z.
-
-(* [idB = \x:Bool. x] *)
-Notation idB := 
-  (tabs x TBool (tvar x)).
-
-(* [idBB = \x:Bool->Bool. x] *)
-Notation idBB := 
-  (tabs x (TArrow TBool TBool) (tvar x)).
-
-(* [idBBBB = \x:(Bool->Bool) -> (Bool->Bool). x] *)
-Notation idBBBB :=
-  (tabs x (TArrow (TArrow TBool TBool) 
-                      (TArrow TBool TBool)) 
-    (tvar x)).
-
-(* [k = \x:Bool. \y:Bool. x] *)
-Notation k := (tabs x TBool (tabs y TBool (tvar x))).
-
-(* [notB = \x:Bool. if x then false else true] *)
-Notation notB := (tabs x TBool (tif (tvar x) tfalse ttrue)).
-
-Hint Constructors value.
-
 Tactic Notation "step_cases" tactic(first) ident(c) :=
   first;
   [ Case_aux c "ST_AppAbs" | Case_aux c "ST_App1" 
@@ -159,109 +102,122 @@ Tactic Notation "step_cases" tactic(first) ident(c) :=
 
 Hint Constructors step.
 
-(** Example:
-    ((\x:Bool->Bool. x) (\x:Bool. x)) ==>* (\x:Bool. x)
-i.e.
-    (idBB idB) ==>* idB
-*)
 
-Lemma step_example1 :
-  (tapp idBB idB) ==>* idB.
+(* Typing, Contexts *)
+Module PartialMap.
+
+Definition partial_map (A:Type) := id -> option A.
+
+Definition empty {A:Type} : partial_map A := (fun _ => None). 
+
+Definition extend {A:Type} (Gamma : partial_map A) (x:id) (T : A) :=
+  fun x' => if eq_id_dec x x' then Some T else Gamma x'.
+
+Lemma extend_eq : forall A (ctxt: partial_map A) x T,
+  (extend ctxt x T) x = Some T.
 Proof.
-  eapply multi_step.
-    apply ST_AppAbs.
-    apply v_abs.
-  simpl.
-  apply multi_refl.  Qed.  
+  intros. unfold extend. rewrite eq_id. auto.
+Qed.
 
-(** Example:
-((\x:Bool->Bool. x) ((\x:Bool->Bool. x) (\x:Bool. x))) 
-      ==>* (\x:Bool. x)
-i.e.
-  (idBB (idBB idB)) ==>* idB.
-*)
-
-Lemma step_example2 :
-  (tapp idBB (tapp idBB idB)) ==>* idB.
+Lemma extend_neq : forall A (ctxt: partial_map A) x1 T x2,
+  x2 <> x1 ->                       
+  (extend ctxt x2 T) x1 = ctxt x1.
 Proof.
-  eapply multi_step.
-    apply ST_App2. auto.
-    apply ST_AppAbs. auto.
-  eapply multi_step.
-    apply ST_AppAbs. simpl. auto.
-  simpl. apply multi_refl.  Qed. 
+  intros. unfold extend. rewrite neq_id; auto.
+Qed.
 
-(** Example:
-((\x:Bool->Bool. x) (\x:Bool. if x then false
-                              else true)) true)
-      ==>* false
-i.e.
-  ((idBB notB) ttrue) ==>* tfalse.
-*)
+End PartialMap.
 
-Lemma step_example3 :
-  tapp (tapp idBB notB) ttrue ==>* tfalse.
-Proof. 
-  eapply multi_step.
-    apply ST_App1. apply ST_AppAbs. auto. simpl.
-  eapply multi_step.
-    apply ST_AppAbs. auto. simpl.
-  eapply multi_step.
-    apply ST_IfTrue. apply multi_refl.  Qed. 
-
-(** Example:
-((\x:Bool -> Bool. x) ((\x:Bool. if x then false
-                               else true) true))
-      ==>* false
-i.e.
-  (idBB (notB ttrue)) ==>* tfalse.
-*)
-
-Lemma step_example4 :
-  tapp idBB (tapp notB ttrue) ==>* tfalse.
-Proof. 
-  eapply multi_step.
-    apply ST_App2. auto. 
-    apply ST_AppAbs. auto. simpl.
-  eapply multi_step.
-    apply ST_App2. auto. 
-    apply ST_IfTrue. 
-  eapply multi_step.
-    apply ST_AppAbs. auto. simpl.
-  apply multi_refl.  Qed. 
+Definition context := partial_map ty.
 
 
-(** A more automatic proof *)
+(* Typing Relation *)
+Reserved Notation "Gamma '|-' t '\in' T" (at level 40).
+    
+Inductive has_type : context -> tm -> ty -> Prop :=
+  | T_Var : forall Gamma x T,
+      Gamma x = Some T ->
+      Gamma |- tvar x \in T
+  | T_Abs : forall Gamma x T11 T12 t12,
+      extend Gamma x T11 |- t12 \in T12 -> 
+      Gamma |- tabs x T11 t12 \in TArrow T11 T12
+  | T_App : forall T11 T12 Gamma t1 t2,
+      Gamma |- t1 \in TArrow T11 T12 -> 
+      Gamma |- t2 \in T11 -> 
+      Gamma |- tapp t1 t2 \in T12
+  | T_True : forall Gamma,
+       Gamma |- ttrue \in TBool
+  | T_False : forall Gamma,
+       Gamma |- tfalse \in TBool
+  | T_If : forall t1 t2 t3 T Gamma,
+       Gamma |- t1 \in TBool ->
+       Gamma |- t2 \in T ->
+       Gamma |- t3 \in T ->
+       Gamma |- tif t1 t2 t3 \in T
 
-Lemma step_example1' :
-  (tapp idBB idB) ==>* idB.
-Proof. normalize.  Qed.  
+where "Gamma '|-' t '\in' T" := (has_type Gamma t T).
 
-(** Again, we can use the [normalize] tactic from above to simplify
-    the proof. *)
+Tactic Notation "has_type_cases" tactic(first) ident(c) :=
+  first;
+  [ Case_aux c "T_Var" | Case_aux c "T_Abs" 
+  | Case_aux c "T_App" | Case_aux c "T_True" 
+  | Case_aux c "T_False" | Case_aux c "T_If" ].
 
-Lemma step_example2' :
-  (tapp idBB (tapp idBB idB)) ==>* idB.
+Hint Constructors has_type.
+
+
+(* Type Checking *)
+Fixpoint beq_ty (T1 T2:ty) : bool :=
+  match T1,T2 with
+  | TBool, TBool => 
+      true
+  | TArrow T11 T12, TArrow T21 T22 => 
+      andb (beq_ty T11 T21) (beq_ty T12 T22)
+  | _,_ => 
+      false
+  end.
+
+Lemma beq_ty_refl : forall T1,
+  beq_ty T1 T1 = true.
 Proof.
-  normalize.
-Qed. 
+  intros T1. induction T1; simpl.
+    reflexivity.
+    rewrite IHT1_1. rewrite IHT1_2. reflexivity.  Qed.
 
-Lemma step_example3' :
-  tapp (tapp idBB notB) ttrue ==>* tfalse.
-Proof. normalize.  Qed.  
+Lemma beq_ty__eq : forall T1 T2,
+  beq_ty T1 T2 = true -> T1 = T2.
+Proof with auto.
+  intros T1. induction T1; intros T2 Hbeq; destruct T2; inversion Hbeq.
+  Case "T1=TBool".
+    reflexivity.
+  Case "T1=TArrow T1_1 T1_2".
+    apply andb_true in H0. inversion H0 as [Hbeq1 Hbeq2].
+    apply IHT1_1 in Hbeq1. apply IHT1_2 in Hbeq2. subst...  Qed.
 
-Lemma step_example4' :
-  tapp idBB (tapp notB ttrue) ==>* tfalse.
-Proof. normalize.  Qed.  
-
-(** **** Exercise: 2 stars (step_example3)  *)  
-(** Try to do this one both with and without [normalize]. *)
-
-Lemma step_example5 :
-       (tapp (tapp idBBBB idBB) idB)
-  ==>* idB.
-Proof.
-  normalize. Qed.
+Fixpoint type_check (Gamma:context) (t:tm) : option ty :=
+  match t with
+  | tvar x => Gamma x
+  | tabs x T11 t12 => match type_check (extend Gamma x T11) t12 with
+                          | Some T12 => Some (TArrow T11 T12)
+                          | _ => None
+                        end
+  | tapp t1 t2 => match type_check Gamma t1, type_check Gamma t2 with
+                      | Some (TArrow T11 T12),Some T2 =>
+                        if beq_ty T11 T2 then Some T12 else None
+                      | _,_ => None
+                    end
+  | ttrue => Some TBool
+  | tfalse => Some TBool
+  | tif x t f => match type_check Gamma x with
+                     | Some TBool => 
+                       match type_check Gamma t, type_check Gamma f with
+                         | Some T1, Some T2 =>
+                           if beq_ty T1 T2 then Some T1 else None
+                         | _,_ => None
+                       end
+                     | _ => None
+                   end
+  end.
 
 End STLC.
 
