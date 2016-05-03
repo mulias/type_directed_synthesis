@@ -131,93 +131,74 @@ End PartialMap.
 Definition context := partial_map ty.
 
 
-(* Typing Relation *)
-Reserved Notation "Gamma '|-' t '\in' T" (at level 40).
+(* Generation Relation *)
+Reserved Notation "Gamma '|-' T '~>' t" (at level 40).
     
-Inductive has_type : context -> tm -> ty -> Prop :=
-  | T_Var : forall Gamma x T,
+Inductive gens_term : context -> ty -> tm -> Prop :=
+  | G_Var : forall Gamma x T,
       Gamma x = Some T ->
-      Gamma |- tvar x \in T
-  | T_Abs : forall Gamma x T11 T12 t12,
-      extend Gamma x T11 |- t12 \in T12 -> 
-      Gamma |- tabs x T11 t12 \in TArrow T11 T12
-  | T_App : forall T11 T12 Gamma t1 t2,
-      Gamma |- t1 \in TArrow T11 T12 -> 
-      Gamma |- t2 \in T11 -> 
-      Gamma |- tapp t1 t2 \in T12
-  | T_True : forall Gamma,
-       Gamma |- ttrue \in TBool
-  | T_False : forall Gamma,
-       Gamma |- tfalse \in TBool
-  | T_If : forall t1 t2 t3 T Gamma,
-       Gamma |- t1 \in TBool ->
-       Gamma |- t2 \in T ->
-       Gamma |- t3 \in T ->
-       Gamma |- tif t1 t2 t3 \in T
+      Gamma |- T ~> tvar x
+  | G_Abs : forall Gamma x T11 T12 t12,
+      extend Gamma x T11 |- T12 ~> t12 -> 
+      Gamma |- TArrow T11 T12 ~> tabs x T11 t12
+  | G_App : forall T11 T12 Gamma t1 t2,
+      Gamma |- TArrow T11 T12 ~> t1 ->
+      Gamma |- T11 ~> t2 ->
+      Gamma |- T12 ~> tapp t1 t2
+  | G_True : forall Gamma,
+       Gamma |- TBool ~> ttrue
+  | G_False : forall Gamma,
+       Gamma |- TBool ~> tfalse
+  | G_If : forall t1 t2 t3 T Gamma,
+       Gamma |- TBool ~> t1 ->
+       Gamma |- T ~> t2 ->
+       Gamma |- T ~> t3 ->
+       Gamma |- T ~> tif t1 t2 t3
 
-where "Gamma '|-' t '\in' T" := (has_type Gamma t T).
+where "Gamma '|-' T '~>' t" := (gens_term Gamma T t).
 
-Tactic Notation "has_type_cases" tactic(first) ident(c) :=
+Tactic Notation "gens_term_cases" tactic(first) ident(c) :=
   first;
-  [ Case_aux c "T_Var" | Case_aux c "T_Abs" 
-  | Case_aux c "T_App" | Case_aux c "T_True" 
-  | Case_aux c "T_False" | Case_aux c "T_If" ].
+  [ Case_aux c "G_Var" | Case_aux c "G_Abs" 
+  | Case_aux c "G_App" | Case_aux c "G_True" 
+  | Case_aux c "G_False" | Case_aux c "G_If" ].
 
-Hint Constructors has_type.
+Hint Constructors gens_term.
 
+Definition x := (Id 0).
+Definition y := (Id 1).
+Definition z := (Id 2).
+Hint Unfold x.
+Hint Unfold y.
+Hint Unfold z.
 
-(* Type Checking *)
-Fixpoint beq_ty (T1 T2:ty) : bool :=
-  match T1,T2 with
-  | TBool, TBool => 
-      true
-  | TArrow T11 T12, TArrow T21 T22 => 
-      andb (beq_ty T11 T21) (beq_ty T12 T22)
-  | _,_ => 
-      false
-  end.
-
-Lemma beq_ty_refl : forall T1,
-  beq_ty T1 T1 = true.
+Example gen_example_1 :
+  empty |- TArrow TBool TBool ~> tabs x TBool (tvar x).
 Proof.
-  intros T1. induction T1; simpl.
-    reflexivity.
-    rewrite IHT1_1. rewrite IHT1_2. reflexivity.  Qed.
+  apply G_Abs. apply G_Var. reflexivity.  Qed.
 
-Lemma beq_ty__eq : forall T1 T2,
-  beq_ty T1 T2 = true -> T1 = T2.
-Proof with auto.
-  intros T1. induction T1; intros T2 Hbeq; destruct T2; inversion Hbeq.
-  Case "T1=TBool".
-    reflexivity.
-  Case "T1=TArrow T1_1 T1_2".
-    apply andb_true in H0. inversion H0 as [Hbeq1 Hbeq2].
-    apply IHT1_1 in Hbeq1. apply IHT1_2 in Hbeq2. subst...  Qed.
+(* (bool->((bool->bool)->bool)) ~> (\x:bool.(\y:bool->bool.(y(y x)))) *)
+Example typing_example_2 :
+  empty |-
+    (TArrow TBool (TArrow (TArrow TBool TBool) TBool)) ~>
+    (tabs x TBool
+       (tabs y (TArrow TBool TBool)
+          (tapp (tvar y) (tapp (tvar y) (tvar x))))).
+Proof with auto using extend_eq.
+  apply G_Abs. apply G_Abs. eapply G_App. apply G_Var...
+  eapply G_App. apply G_Var...
+  apply G_Var...
+Qed.
 
-Fixpoint type_check (Gamma:context) (t:tm) : option ty :=
-  match t with
-  | tvar x => Gamma x
-  | tabs x T11 t12 => match type_check (extend Gamma x T11) t12 with
-                          | Some T12 => Some (TArrow T11 T12)
-                          | _ => None
-                        end
-  | tapp t1 t2 => match type_check Gamma t1, type_check Gamma t2 with
-                      | Some (TArrow T11 T12),Some T2 =>
-                        if beq_ty T11 T2 then Some T12 else None
-                      | _,_ => None
-                    end
-  | ttrue => Some TBool
-  | tfalse => Some TBool
-  | tif x t f => match type_check Gamma x with
-                     | Some TBool => 
-                       match type_check Gamma t, type_check Gamma f with
-                         | Some T1, Some T2 =>
-                           if beq_ty T1 T2 then Some T1 else None
-                         | _,_ => None
-                       end
-                     | _ => None
-                   end
-  end.
+(* thesis page 14 example *)
+Example typing_example_3 :
+  empty |-
+    (TArrow TBool TBool) ~>
+    (tapp (tabs x (TArrow TBool TBool) (tvar x)) (tabs y TBool ttrue)).
+Proof with auto using extend_eq.
+  eapply G_App. apply G_Abs. apply G_Var...
+  apply G_Abs. apply G_True.
+Qed.
 
 End STLC.
 
