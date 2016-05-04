@@ -7,7 +7,8 @@ Module STLC.
 
 (* Types *)
 Inductive ty : Type := 
-  | TBool  : ty 
+  | TBool  : ty
+  | TNat   : ty
   | TArrow : ty -> ty -> ty.
 
 
@@ -18,7 +19,10 @@ Inductive tm : Type :=
   | tabs : id -> ty -> tm -> tm
   | ttrue : tm
   | tfalse : tm
-  | tif : tm -> tm -> tm -> tm.
+  | tif : tm -> tm -> tm -> tm
+  | tzero : tm
+  | tsucc : tm -> tm
+  | tiszero : tm -> tm.
 
 Tactic Notation "t_cases" tactic(first) ident(c) :=
   first;
@@ -28,15 +32,22 @@ Tactic Notation "t_cases" tactic(first) ident(c) :=
 
 
 (* Values *)
-Inductive value : tm -> Prop :=
-  | v_abs : forall x T t,
-      value (tabs x T t)
-  | v_true : 
-      value ttrue
-  | v_false : 
-      value tfalse.
+Inductive avalue : tm -> Prop := 
+  | av_abs : forall x T t, avalue (tabs x T t).
 
-Hint Constructors value.
+Inductive bvalue : tm -> Prop :=
+  | bv_true : bvalue ttrue
+  | bv_false : bvalue tfalse.
+
+Inductive nvalue : tm -> Prop :=
+  | nv_zero : nvalue tzero
+  | nv_succ : forall t, nvalue t -> nvalue (tsucc t).
+
+Definition value (t:tm) := avalue t \/ bvalue t \/ nvalue t.
+
+Hint Constructors avalue bvalue nvalue.
+Hint Unfold value.  
+Hint Unfold extend.
 
 
 (* Substitution *)
@@ -56,6 +67,12 @@ Fixpoint subst (x:id) (s:tm) (t:tm) : tm :=
       tfalse
   | tif t1 t2 t3 => 
       tif ([x:=s] t1) ([x:=s] t2) ([x:=s] t3)
+  | tzero =>
+      tzero
+  | tsucc n =>
+     tsucc ([x:=s] n)
+  | tiszero n =>
+      tiszero ([x:=s] n)
   end
 
 where "'[' x ':=' s ']' t" := (subst x s t).
@@ -88,6 +105,21 @@ Inductive step : tm -> tm -> Prop :=
   | ST_If : forall t1 t1' t2 t3,
       t1 ==> t1' ->
       (tif t1 t2 t3) ==> (tif t1' t2 t3)
+  (* step body of Succ *)
+  | ST_Succ : forall t1 t1',
+      t1 ==> t1' ->
+      (tsucc t1) ==> (tsucc t1')
+  (* iszero(O) is true *)
+  | ST_IszeroZero :
+      (tiszero tzero) ==> ttrue
+  (* iszero(S(n)) is false *)
+  | ST_IszeroSucc : forall t1,
+       nvalue t1 ->
+      (tiszero (tsucc t1)) ==> tfalse
+  (* step body of iszero *)
+  | ST_Iszero : forall t1 t1',
+      t1 ==> t1' ->
+      (tiszero t1) ==> (tiszero t1')
 
 where "t1 '==>' t2" := (step t1 t2).
 
@@ -154,6 +186,14 @@ Inductive gens_term : context -> ty -> tm -> Prop :=
        Gamma |- T ~> t2 ->
        Gamma |- T ~> t3 ->
        Gamma |- T ~> tif t1 t2 t3
+  | G_Zero : forall Gamma,
+       Gamma |- TNat ~> tzero
+  | G_Succ : forall t1 Gamma,
+       Gamma |- TNat ~> t1 ->
+       Gamma |- TNat ~> tsucc t1
+  | G_Iszero : forall t1 Gamma,
+       Gamma |- TNat ~> t1 ->
+       Gamma |- TBool ~> tiszero t1
 
 where "Gamma '|-' T '~>' t" := (gens_term Gamma T t).
 
@@ -199,6 +239,26 @@ Proof with auto using extend_eq.
   eapply G_App. apply G_Abs. apply G_Var...
   apply G_Abs. apply G_True.
 Qed.
+
+(* Nat ~> S(S(S(O))) *)
+Example typing_example_4 :
+  empty |-
+    TNat ~>
+    tsucc (tsucc (tsucc tzero)).
+Proof with auto using extend_eq.
+  auto.
+Qed.
+
+(* Nat ~> (\x:nat.S(x)) O *)
+Example typing_example_5 :
+  empty |-
+    TNat ~>
+    tapp (tabs x TNat (tsucc (tvar x))) (tsucc tzero).
+Proof with auto using extend_eq.
+  eapply G_App. apply G_Abs. apply G_Succ. apply G_Var...
+  apply G_Succ. apply G_Zero.
+Qed.
+
 
 End STLC.
 
